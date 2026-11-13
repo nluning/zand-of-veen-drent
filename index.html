@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Zand-Drent of Veen-Drent?</title>
+</head>
+<body>
+  <h1>Wat voor Drent ben jij?</h1>
+
+  <input id="place" type="text" placeholder="e.g. Exloo">
+  <button id="search">Zoek</button>
+
+  <h2 id="answer"></h2>
+  <pre id="output"></pre>
+
+  <script>
+    const BASE_URL = "https://api.pdok.nl/bzk/locatieserver/search/v3_1/free";
+
+    // Locatieserver returns points as WKT, e.g. "POINT(254507.049 545156.929)".
+    function parseWktPoint(wkt) {
+      const match = wkt.match(/POINT\(([-\d.]+) ([-\d.]+)\)/);
+      if (!match) {
+        throw new Error("Not a WKT point: " + wkt);
+      }
+      return { x: Number(match[1]), y: Number(match[2]) };
+    }
+
+    async function findPlace(name) {
+      const params = new URLSearchParams({ q: name, rows: 1, fl: "weergavenaam,centroide_rd,centroide_ll" });
+      params.append("fq", "type:woonplaats");
+      params.append("fq", "provincienaam:Drenthe");
+
+      const response = await fetch(BASE_URL + "?" + params);
+      const data = await response.json();
+
+      const doc = data.response.docs[0];
+      if (!doc) {
+        return null;
+      }
+      return {
+        name: doc.weergavenaam,
+        rd: parseWktPoint(doc.centroide_rd),  // metres, EPSG:28992
+        ll: parseWktPoint(doc.centroide_ll),  // degrees, x = longitude, y = latitude (WGS84)
+      };
+    }
+
+    const SOIL_URL = "https://service.pdok.nl/bzk/bro-bodemkaart/wms/v1_0";
+
+    // The Bodemkaart has no WFS, so a point is queried with WMS GetFeatureInfo, which
+    // answers for one pixel of a rendered image. The image is a 10 m x 10 m box of
+    // 101 x 101 pixels centred on the point, queried at the middle pixel (50,50).
+    async function findSoil(x, y) {
+      const half = 5;
+      const bbox = [x - half, y - half, x + half, y + half];
+
+      const params = new URLSearchParams({
+        SERVICE: "WMS",
+        VERSION: "1.3.0",
+        REQUEST: "GetFeatureInfo",
+        LAYERS: "soilarea",
+        QUERY_LAYERS: "soilarea",
+        STYLES: "",
+        CRS: "EPSG:28992",
+        BBOX: bbox.join(","),
+        WIDTH: 101,
+        HEIGHT: 101,
+        I: 50,
+        J: 50,
+        INFO_FORMAT: "application/json",
+      });
+
+      const response = await fetch(SOIL_URL + "?" + params);
+      const data = await response.json();
+      return data.features; // empty in built-up areas
+    }
+
+    // Semicolons are dropped, spaces become dashes. The name is returned without the
+    // surrounding sentence so the page can put it in italics.
+    function dashedName(soilName) {
+      return soilName.replace(/;/g, "").trim().replace(/\s+/g, "-");
+    }
+
+    // G = geological boreholes, GT = geotechnical boreholes. Both registers work in two
+    // steps: POST a search area to /characteristics/searches (BRO ids and locations),
+    // then GET /objects/{broId} for the full borehole, including its layers.
+    const BRO_APIS = {
+      G:  "https://publiek.broservices.nl/sr/bhrg/v3",
+      GT: "https://publiek.broservices.nl/sr/bhrgt/v2",
+    };
+
+    // Search radii in kilometres, tried in order until a borehole is found. The API is
+    // meant for occasional lookups, so most places should be answered by the first step.
+    const BOREHOLE_RADII_KM = [0.5, 1, 2, 5];
+
+    // The G and GT XML use different namespaces, so elements are matched by local name.
+    function elementsNamed(parent, name) {
+      return Array.from(parent.getElementsByTagNameNS("*", name));
+    }
+    function textOf(parent, name) {
+      const el = elementsNamed(parent, name)[0];
+      return el ? el.textContent.trim() : null;
+    }
+
+    async function searchBoreholes(type, ll, radiusKm) {
+      const body = {
+        area: { enclosingCircle: { center: { lat: ll.y, lon: ll.x }, radius: radiusKm } },
+      };
+      const response = await fetch(BRO_APIS[type] + "/characteristics/searches", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) {
+        throw new Error("BRO search (" + type + ") failed: HTTP " + response.status);
+      }
+      const xml = new DOMParser().parseFromString(await response.text(), "application/xml");
+
+      // The position is "lat lon", the reverse of the x/y order of ll.
+      return elementsNamed(xml, "dispatchDocument").map((doc) => {
+        const [lat, lon] = textOf(doc, "pos").split(" ").map(Number);
+        return { type: type, broId: textOf(doc, "broId"), lat: lat, lon: lon };
+      });
+    }
+
+    // Flat-earth approximation, accurate enough over a few kilometres.
+    function distanceMetres(lat1, lon1, lat2, lon2) {
+      const dy = (lat2 - lat1) * 111200;
+      const dx = (lon2 - lon1) * 111200 * Math.cos((lat1 * Math.PI) / 180);
+      return Math.hypot(dx, dy);
+    }
+
+    // Returns the closest borehole of either type, or null if the largest radius is empty.
+    async function findBorehole(ll) {
+      for (const radiusKm of BOREHOLE_RADII_KM) {
+        const [g, gt] = await Promise.all([
+          searchBoreholes("G", ll, radiusKm),
+          searchBoreholes("GT", ll, radiusKm),
+        ]);
+        const all = g.concat(gt).map((b) => ({
+          ...b,
+          distance: Math.round(distanceMetres(ll.y, ll.x, b.lat, b.lon)),
+        }));
+        if (all.length > 0) {
+          all.sort((a, b) => a.distance - b.distance);
+          return all[0];
+        }
+      }
+      return null;
+    }
+
+    // A layer is named by soilNameNEN5104 (G) or geotechnicalSoilName (GT), or carries
+    // a specialMaterial instead. `anthropogenic` is "ja", "nee" or "onbekend".
+    async function fetchLayers(borehole) {
+      const response = await fetch(BRO_APIS[borehole.type] + "/objects/" + borehole.broId);
+      if (!response.ok) {
+        throw new Error("BRO fetch failed: HTTP " + response.status);
+      }
+      const xml = new DOMParser().parseFromString(await response.text(), "application/xml");
+
+      return elementsNamed(xml, "layer").map((layer) => ({
+        from: Number(textOf(layer, "upperBoundary")),
+        to: Number(textOf(layer, "lowerBoundary")),
+        anthropogenic: textOf(layer, "anthropogenic"),
+        material:
+          textOf(layer, "soilNameNEN5104") ||
+          textOf(layer, "geotechnicalSoilName") ||
+          textOf(layer, "specialMaterial"),
+      }));
+    }
+
+    // The first layer that is not fill or paving.
+    function firstNaturalLayer(layers) {
+      return layers.find((l) => l.anthropogenic !== "ja" && l.material) || null;
+    }
+
+    const input = document.getElementById("place");
+    const answer = document.getElementById("answer");
+    const output = document.getElementById("output");
+
+    async function onSearch() {
+      answer.replaceChildren();
+      output.textContent = "Searching...";
+      try {
+        const result = await answerFor(input.value.trim());
+        if (result.soilName) {
+          // Built from elements rather than innerHTML: the name comes from an outside server.
+          const em = document.createElement("em");
+          em.textContent = result.soilName;
+          answer.append("Je bent een ", em, "-Drent!");
+        }
+        output.textContent = result.details;
+      } catch (err) {
+        output.textContent = "Er ging iets fout: " + err.message;
+      }
+    }
+
+    // soilName goes into the headline, details into the <pre>.
+    async function answerFor(placeName) {
+      const place = await findPlace(placeName);
+      if (!place) {
+        return { soilName: "", details: "Geen plaats gevonden in Drenthe." };
+      }
+      let text =
+        place.name + "\n" +
+        "RD (metres):  x=" + place.rd.x + "  y=" + place.rd.y + "\n" +
+        "WGS84 (deg):  lon=" + place.ll.x + "  lat=" + place.ll.y + "\n\n";
+
+      const features = await findSoil(place.rd.x, place.rd.y);
+      if (features.length > 0) {
+        const props = features[0].properties;
+        return {
+          soilName: dashedName(props.normal_soilprofile_name),
+          details: "Meer informatie: \n \n" +
+            text +
+            "Bodemcode " + props.normal_soilprofile_code + ".\n\n" +
+            "Raw attributes:\n" + JSON.stringify(props, null, 2),
+        };
+      }
+
+      // The soil map has no data for built-up areas: fall back to a borehole.
+      const borehole = await findBorehole(place.ll);
+      if (!borehole) {
+        return {
+          soilName: "",
+          details: text + "Geen bodemkaartgegevens hier, en geen boorgegevens gevonden binnen een straal van " +
+            BOREHOLE_RADII_KM[BOREHOLE_RADII_KM.length - 1] + " km.",
+        };
+      }
+
+      const layers = await fetchLayers(borehole);
+      const layer = firstNaturalLayer(layers);
+
+      const table = layers
+        .map((l) => {
+          const mark = l === layer ? "  <-- gebruikt" : "";
+          return "  " + l.from.toFixed(2) + " - " + l.to.toFixed(2) + " m  " +
+            (l.anthropogenic === "ja" ? "[fill] " : "       ") + (l.material || "?") + mark;
+        })
+        .join("\n");
+
+      return {
+        soilName: layer ? dashedName(layer.material) : "",
+        details: text +
+          (layer ? "" : "Er werden boorgegevens gevonden, maar hiervan kon geen laag gebruikt worden.\n\n") +
+          "(Dit zijn de gegevens van boorgat " + borehole.broId + " (BHR-" + borehole.type + "), " +
+          borehole.distance + " m. verwijderd van zoeklocatie.)\n\n" +
+          "Lagen:\n" + table,
+      };
+    }
+
+    document.getElementById("search").addEventListener("click", onSearch);
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") onSearch(); });
+  </script>
+</body>
+</html>
