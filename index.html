@@ -2,16 +2,42 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Zand-Drent of Veen-Drent?</title>
+  <style>
+    .layout {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+    .controls {
+      flex: 1 1 18rem;
+      min-width: 0;
+      overflow-x: auto;
+    }
+    #map {
+      flex: 1 1 18rem;
+      height: 24rem;
+      border: 1px solid #999;
+      background: #eee;
+    }
+  </style>
 </head>
 <body>
-  <h1>Wat voor Drent ben jij?</h1>
+  <h1>Waar kom je weg?</h1>
 
-  <input id="place" type="text" placeholder="e.g. Exloo">
-  <button id="search">Zoek</button>
+  <p>Voer je woonplaats in of klik op de kaart</p>
 
-  <h2 id="answer"></h2>
-  <pre id="output"></pre>
+  <div class="layout">
+    <div class="controls">
+      <input id="place" type="text" placeholder="e.g. Exloo">
+      <button id="search">Zoek</button>
+
+      <h2 id="answer"></h2>
+      <pre id="output"></pre>
+    </div>
+    <div id="map"></div>
+  </div>
 
   <script>
     const BASE_URL = "https://api.pdok.nl/bzk/locatieserver/search/v3_1/free";
