@@ -17,11 +17,15 @@
     }
     #map {
       flex: 1 1 18rem;
-      height: 24rem;
+      aspect-ratio: 1;
+      align-self: start;
       border: 1px solid #999;
       background: #eee;
     }
   </style>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"
+        integrity="sha512-h9FcoyWjHcOcmEVkxOfTLnmZFWIH0iZhZT1H2TbOq55xssQGEJHEaIm+PgoUaZbRvQTNTluNOEfb1ZRy6D3BOw=="
+        crossorigin="">
 </head>
 <body>
   <h1>Waar kom je weg?</h1>
@@ -39,8 +43,11 @@
     <div id="map"></div>
   </div>
 
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"
+          integrity="sha512-puJW3E/qXDqYp9IfhAI54BJEaWIfloJ7JWs7OeD5i6ruC9JZL1gERT1wjtwXFlh7CjE7ZJ+/vcRZRkIYIb6p4g=="
+          crossorigin=""></script>
   <script>
-    const BASE_URL = "https://api.pdok.nl/bzk/locatieserver/search/v3_1/free";
+    const BASE_URL ="https://api.pdok.nl/bzk/locatieserver/search/v3_1/free";
 
     // Locatieserver returns points as WKT, e.g. "POINT(254507.049 545156.929)".
     function parseWktPoint(wkt) {
@@ -273,6 +280,23 @@
           "Lagen:\n" + table,
       };
     }
+
+    // --- Map ---
+    // The Leaflet script defines one global called `L`.
+    const Leaflet = L;
+
+    const DRENTHE_BOUNDS = Leaflet.latLngBounds([52.6, 6.1], [53.2, 7.1]);
+    const MAX_BOUNDS = Leaflet.latLngBounds([52.45, 5.95], [53.35, 7.25]);
+
+    // Leaflet works in Web Mercator (EPSG:3857) internally but we hand it lat/lon;
+    // it does that conversion for us.
+    const map = Leaflet.map("map",{ maxBounds: MAX_BOUNDS, minZoom: 8, maxZoom: 19, zoomSnap: 0.25 })
+      .fitBounds(DRENTHE_BOUNDS);
+
+    Leaflet.tileLayer(
+      "https://service.pdok.nl/brt/achtergrondkaart/wmts/v2_0/standaard/EPSG:3857/{z}/{x}/{y}.png",
+      { attribution: "Kaartgegevens &copy; <a href='https://www.kadaster.nl'>Kadaster</a>" }
+    ).addTo(map);
 
     document.getElementById("search").addEventListener("click", onSearch);
     input.addEventListener("keydown", (e) => { if (e.key === "Enter") onSearch(); });
