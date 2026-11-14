@@ -46,6 +46,9 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"
           integrity="sha512-puJW3E/qXDqYp9IfhAI54BJEaWIfloJ7JWs7OeD5i6ruC9JZL1gERT1wjtwXFlh7CjE7ZJ+/vcRZRkIYIb6p4g=="
           crossorigin=""></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.15.0/proj4.js"
+          integrity="sha512-zlBm5j/0UjgCzqBVLkATd/2b9Yun4SzATXJ7v1T2KfjmP0iw8FUcG5mPD60SrdxU+tRkACm3IQRq55pEkp9Qow=="
+          crossorigin=""></script>
   <script>
     const BASE_URL ="https://api.pdok.nl/bzk/locatieserver/search/v3_1/free";
 
@@ -279,6 +282,20 @@
           borehole.distance + " m. verwijderd van zoeklocatie.)\n\n" +
           "Lagen:\n" + table,
       };
+    }
+
+    // --- Reprojection: WGS84 -> RD ---
+
+    const RD_DEFINITION =
+      "+proj=sterea +lat_0=52.15616055555555 +lon_0=5.38763888888889 +k=0.9999079 " +
+      "+x_0=155000 +y_0=463000 +ellps=bessel " +
+      "+towgs84=565.4171,50.3319,465.5524,-0.398957,0.343988,-1.87740,4.0725 +units=m +no_defs";
+
+    // Leaflet gives a click as latitude and longitude; the soil map wants RD metres.
+    // proj4 takes [longitude, latitude], the reverse of how Leaflet names them.
+    function toRd(lat, lon) {
+      const [x, y] = proj4("EPSG:4326", RD_DEFINITION, [lon, lat]);
+      return { x: x, y: y };
     }
 
     // --- Map ---
