@@ -213,13 +213,12 @@
     const answer = document.getElementById("answer");
     const output = document.getElementById("output");
 
-    async function onSearch() {
+    async function showAnswer(lookup) {
       answer.replaceChildren();
       output.textContent = "Searching...";
       try {
-        const result = await answerFor(input.value.trim());
+        const result = await lookup();
         if (result.soilName) {
-          // Built from elements rather than innerHTML: the name comes from an outside server.
           const em = document.createElement("em");
           em.textContent = result.soilName;
           answer.append("Je bent een ", em, "-Drent!");
@@ -230,18 +229,26 @@
       }
     }
 
-    // soilName goes into the headline, details into the <pre>.
+    function onSearch() {
+      showAnswer(() => answerFor(input.value.trim()));
+    }
+
+    // A search: name -> place -> the shared point lookup.
     async function answerFor(placeName) {
       const place = await findPlace(placeName);
       if (!place) {
         return { soilName: "", details: "Geen plaats gevonden in Drenthe." };
       }
-      let text =
-        place.name + "\n" +
-        "RD (metres):  x=" + place.rd.x + "  y=" + place.rd.y + "\n" +
-        "WGS84 (deg):  lon=" + place.ll.x + "  lat=" + place.ll.y + "\n\n";
+      return answerForPoint({ label: place.name, rd: place.rd, ll: place.ll });
+    }
 
-      const features = await findSoil(place.rd.x, place.rd.y);
+    async function answerForPoint(point) {
+      let text =
+        point.label + "\n" +
+        "RD (metres):  x=" + point.rd.x + "  y=" + point.rd.y + "\n" +
+        "WGS84 (deg):  lon=" + point.ll.x + "  lat=" + point.ll.y + "\n\n";
+
+      const features = await findSoil(point.rd.x, point.rd.y);
       if (features.length > 0) {
         const props = features[0].properties;
         return {
@@ -254,7 +261,7 @@
       }
 
       // The soil map has no data for built-up areas: fall back to a borehole.
-      const borehole = await findBorehole(place.ll);
+      const borehole = await findBorehole(point.ll);
       if (!borehole) {
         return {
           soilName: "",
