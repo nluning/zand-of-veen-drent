@@ -80,6 +80,26 @@
       };
     }
 
+    const REVERSE_URL = "https://api.pdok.nl/bzk/locatieserver/search/v3_1/reverse";
+
+    async function findPlaceAt(lat, lon) {
+      const params = new URLSearchParams({
+        lat: lat,
+        lon: lon,
+        type: "woonplaats",
+        rows: 1,
+        fl: "weergavenaam,provincienaam,afstand",
+      });
+      const response = await fetch(REVERSE_URL + "?" + params);
+      const data = await response.json();
+
+      const doc = data.response.docs[0];
+      if (!doc || doc.provincienaam !== "Drenthe" || doc.afstand >= 1) {
+        return null;
+      }
+      return { name: doc.weergavenaam };
+    }
+
     const SOIL_URL = "https://service.pdok.nl/bzk/bro-bodemkaart/wms/v1_0";
 
     // The Bodemkaart has no WFS, so a point is queried with WMS GetFeatureInfo, which
@@ -213,11 +233,17 @@
     const answer = document.getElementById("answer");
     const output = document.getElementById("output");
 
+    let latestLookup = 0;
+
     async function showAnswer(lookup) {
+      const thisLookup = ++latestLookup;
       answer.replaceChildren();
       output.textContent = "Searching...";
       try {
         const result = await lookup();
+        if (thisLookup !== latestLookup) {
+          return;
+        }
         if (result.soilName) {
           const em = document.createElement("em");
           em.textContent = result.soilName;
@@ -225,8 +251,17 @@
         }
         output.textContent = result.details;
       } catch (err) {
+        if (thisLookup !== latestLookup) {
+          return;
+        }
         output.textContent = "Er ging iets fout: " + err.message;
       }
+    }
+
+    function clearAnswer() {
+      latestLookup++;
+      answer.replaceChildren();
+      output.textContent = "";
     }
 
     function onSearch() {
@@ -239,7 +274,21 @@
       if (!place) {
         return { soilName: "", details: "Geen plaats gevonden in Drenthe." };
       }
+      showOnMap(place.ll.y, place.ll.x, PLACE_ZOOM);
       return answerForPoint({ label: place.name, rd: place.rd, ll: place.ll });
+    }
+
+    // A map click: lat/lon -> is it in Drenthe? -> RD -> the shared point lookup.
+    async function answerForClick(latlng) {
+      const place = await findPlaceAt(latlng.lat, latlng.lng);
+      if (!place) {
+        return { soilName: "", details: "Dit punt ligt niet in Drenthe. Klik binnen de provincie of zoek een plaats." };
+      }
+      return answerForPoint({
+        label: "Kaartklik in " + place.name,
+        rd: toRd(latlng.lat, latlng.lng),
+        ll: { x: latlng.lng, y: latlng.lat },   // same shape as place.ll: x = longitude, y = latitude
+      });
     }
 
     async function answerForPoint(point) {
@@ -321,6 +370,39 @@
       "https://service.pdok.nl/brt/achtergrondkaart/wmts/v2_0/standaard/EPSG:3857/{z}/{x}/{y}.png",
       { attribution: "Kaartgegevens &copy; <a href='https://www.kadaster.nl'>Kadaster</a>" }
     ).addTo(map);
+
+    const PLACE_ZOOM = 12;
+    let marker = null;
+
+    function showOnMap(lat, lon, zoom) {
+      if (marker) {
+        marker.setLatLng([lat, lon]);
+      } else {
+        marker = Leaflet.marker([lat, lon]).addTo(map);
+      }
+      // Drop the button of an earlier click: it would search the wrong spot from here on.
+      marker.unbindPopup();
+      if (zoom) {
+        map.setView([lat, lon], zoom);
+      }
+    }
+
+    function offerLookup(latlng) {
+      const button = document.createElement("button");
+      button.textContent = "Zoek hier";
+      button.addEventListener("click", () => {
+        marker.closePopup();
+        showAnswer(() => answerForClick(latlng));
+      });
+      marker.bindPopup(button).openPopup();
+    }
+
+    // Leaflet names the longitude `lng`; the rest of this file says `lon`.
+    map.on("click", (event) => {
+      showOnMap(event.latlng.lat, event.latlng.lng);
+      clearAnswer();   // the old answer belongs to the previous spot
+      offerLookup(event.latlng);
+    });
 
     document.getElementById("search").addEventListener("click", onSearch);
     input.addEventListener("keydown", (e) => { if (e.key === "Enter") onSearch(); });
