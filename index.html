@@ -237,11 +237,12 @@
 
     async function showAnswer(lookup) {
       const thisLookup = ++latestLookup;
+      const isCurrent = () => thisLookup === latestLookup;
       answer.replaceChildren();
       output.textContent = "Searching...";
       try {
-        const result = await lookup();
-        if (thisLookup !== latestLookup) {
+        const result = await lookup(isCurrent);
+        if (!isCurrent()) {
           return;
         }
         if (result.soilName) {
@@ -251,7 +252,7 @@
         }
         output.textContent = result.details;
       } catch (err) {
-        if (thisLookup !== latestLookup) {
+        if (!isCurrent()) {
           return;
         }
         output.textContent = "Er ging iets fout: " + err.message;
@@ -265,16 +266,18 @@
     }
 
     function onSearch() {
-      showAnswer(() => answerFor(input.value.trim()));
+      showAnswer((isCurrent) => answerFor(input.value.trim(), isCurrent));
     }
 
     // A search: name -> place -> the shared point lookup.
-    async function answerFor(placeName) {
+    async function answerFor(placeName, isCurrent) {
       const place = await findPlace(placeName);
       if (!place) {
         return { soilName: "", details: "Geen plaats gevonden in Drenthe." };
       }
-      showOnMap(place.ll.y, place.ll.x, PLACE_ZOOM);
+      if (isCurrent()) {
+        showOnMap(place.ll.y, place.ll.x, PLACE_ZOOM);
+      }
       return answerForPoint({ label: place.name, rd: place.rd, ll: place.ll });
     }
 
